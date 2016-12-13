@@ -1,0 +1,64 @@
+---
+- name: add mono apt-key
+  apt_key: keyserver=keyserver.ubuntu.com id=3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF
+
+- name: add mono repo
+  apt_repository: repo='deb http://download.mono-project.com/repo/debian wheezy main'
+  tags: [repo]
+
+- name: enable universe repo
+  apt_repository: repo='deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe'
+  tags: [repo]
+
+- name: enable 32-bit packages
+  command: dpkg --add-architecture i386
+
+- name: install packages
+  package: name={{ item }} state=present
+  with_items:
+    - autotools-dev
+    - git
+    - mono-devel
+    - referenceassemblies-pcl
+    - nuget
+    - g++-multilib
+    - cmake
+
+- git: repo=https://github.com/xamarin/xamarin-android
+       dest={{ xamarin_android_directory }}
+       version={{ xamarin_android_commit }}
+  tags: [git]
+
+- name: config build
+  template: src=Configuration.Override.props dest={{ xamarin_android_directory }}/Configuration.Override.props
+
+- name: make prepare
+  command: make prepare chdir={{ xamarin_android_directory }}
+  tags: [make]
+
+- name: land opentk issue patch
+  copy: src=opentk_not_shared.patch dest={{ xamarin_android_directory }}/opentk_not_shared.patch
+
+- name: apply opentk issue patch
+  command: git apply opentk_not_shared.patch chdir={{ xamarin_android_directory }}
+  ignore_errors: yes
+
+- name: build runtime libraries & task assemblies
+  command: xbuild /p:Configuration={{ item }} Xamarin.Android.sln chdir={{ xamarin_android_directory }}
+  with_items:
+    - Debug
+    - Release
+  tags: [runtime]
+
+- name: build framework assemblies
+  command: xbuild
+           /p:Configuration={{ item.0 }}
+           /p:AndroidApiLevel={{ item.1 }}
+           /p:AndroidFrameworkVersion={{ xamarin_android_api_versions[item.1] }}
+           src/{{ item.2 }}
+           chdir={{ xamarin_android_directory }}
+  with_nested:
+    - [ Debug, Release ]
+    - '{{ xamarin_android_api_levels }}'
+    - [ Mono.Android/Mono.Android.csproj, OpenTK-1.0/OpenTK.csproj, Mono.Android.Export/Mono.Android.Export.csproj ]
+  tags: [framework]
